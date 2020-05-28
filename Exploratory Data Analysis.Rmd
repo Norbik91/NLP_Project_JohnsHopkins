@@ -1,0 +1,508 @@
+---
+title: "N-Grams Project: Exploratory Data Analysis"
+author: "Andrey Ivanov"
+date: "26/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setenv(JAVA_HOME = "C:\\Program Files\\Java\\jre1.8.0_161")
+```
+
+# Synopsis.
+The goal for the study is to construct linguistic (N-Gram) model predicting new words based on few previous words.  
+There will be explored three data sets: collections of US Blog posts, US News posts, US Twitter posts.  
+The goal for this paper is to understand basic relationships in the data.  
+Main tasks to acheive the goal:  
+      - Download data sets  
+      - Create a basic report of summary statistics about the data sets  
+      - Profile data sets and report relationships found in the data  
+      - Provide plan for creating a prediction algorithm
+  
+  
+# 1. Data Collection and Summary.  
+```{r, echo=TRUE, message=FALSE}
+# Import libraries needed for the project
+library(ggplot2)
+library(tm)
+library(RWeka)
+library(dplyr)
+library(stringr)
+library(formattable)
+library(grid)
+library(gridExtra)
+library(ggwordcloud)
+```
+  
+Data sets are available via the link:
+https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip  
+
+Let's download data sets and import the data.
+```{r, echo=TRUE, eval=FALSE, cache=TRUE}
+url = "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+download.file(url, destfile = 'Coursera-SwiftKey.zip')
+unzip('Coursera-SwiftKey.zip', exdir = 'Coursera-SwiftKey')
+file.remove('Coursera-SwiftKey.zip')
+```
+  
+  
+Read files and generate summary table.  
+```{r, echo=TRUE, cache=TRUE}
+# read data sets
+conBlog <- file("./Coursera-SwiftKey/final/en_US/en_US.blogs.txt", "r")
+conNews <- file("./Coursera-SwiftKey/final/en_US/en_US.news.txt", "r")
+conTwit <- file("./Coursera-SwiftKey/final/en_US/en_US.twitter.txt", "r")
+
+dfEnBlog <- readLines(conBlog, encoding = "UTF-8", skipNul = TRUE)
+dfEnNews <- readLines(conNews, encoding = "UTF-8", skipNul = TRUE)
+dfEnTwit <- readLines(conTwit, encoding = "UTF-8", skipNul = TRUE)
+
+close(conBlog); close(conNews); close(conTwit)
+
+# Creat list of data sets.
+df.list <- list(dfEnBlog, dfEnNews, dfEnTwit)
+rm(dfEnBlog, dfEnNews, dfEnTwit)
+Data.Name <- c('US Blogs', 'US News', 'US Twitter')
+
+# calculate summary metrics (number of lines, number of non-empty lines, number of characters in whole
+# document, maximum and average number of characters per line)
+File.Size <- sapply(df.list, function(df) { format(object.size(df), 'Mb') })
+Num.Lines <- sapply(df.list, function(df) { length(df) })
+Num.NEmpty.Lines <- sapply(df.list, function(df) { sum(sapply(df, function(l) {length(l) != 0})) })
+
+nchars <- sapply(df.list, function(df) { nchar(df) })
+Num.Chars <- sapply(nchars, function(nc) { sum(nc) })
+Max.Chars <- sapply(nchars, function(nc) { max(nc) })
+Avg.Chars <- sapply(nchars, function(nc) { mean(nc) })
+
+# create summary table
+table.stat <- data.frame(
+   "Data.Name" = Data.Name,
+   "File.Size" = File.Size,
+   "Num.Lines" = format(Num.Lines, big.mark = ' '),
+   "Num.NEmty.Lines" = format(Num.NEmpty.Lines, big.mark = ' '),
+   "Num.Chars" = format(Num.Chars, big.mark = ' '),
+   "Max.Chars.per.Line" = format(Max.Chars, big.mark = ' '),
+   "Avg.Chars.per.Line" = format(round(Avg.Chars, 1))
+)
+# print table
+formattable(table.stat)
+```
+  <center>  **Table 1.1:** Data Summary.  </center>  
+***  
+- There are no empty lines observed in data sets.  
+- In Twitter Data the number of characters per line is limited by 140. May be it will result in less variability in n-gram constructions.  
+  
+Let's Create Summary Table and Histogram for Word Counts:
+```{r, echo=TRUE, cache=TRUE}
+# create statistics of data (maximum value, mean, median of number of the words)
+nwords <- sapply(df.list, function(df) { str_count(df, "\\S+") })
+Num.Words <- sapply(nwords, function(nw) { sum(nw) })
+Max.Words <- sapply(nwords, function(nw) { max(nw) })
+Avg.Words <- sapply(nwords, function(nw) { mean(nw) })
+Median.Words <- sapply(nwords, function(nw) { median(nw) })
+
+# create data frame with summary information
+words.stat <- data.frame(
+   "Data.Name" = Data.Name,
+   "Number of Words" = format(Num.Words, big.mark = ' '),
+   "Maximum Words per Line" = format(Max.Words, big.mark = ' '),
+   "Average Words per Line" = format(round(Avg.Words, 1)),
+   "Median Words per Line" = format(round(Median.Words, 1))
+)
+# print summary table
+formattable(words.stat)
+
+```
+  <center>  **Table 1.2:** Words Summary.  </center>  
+***  
+
+```{r, echo=TRUE, fig.width=14, fig.height=6, cache=TRUE}
+# limit data entries (lines) by 200 words for visibility purposes (most of the data fit this constraint)
+nwords.lim100 <- sapply(nwords, function(counts) { counts[counts < 200] })
+
+## Create Histogram plots of Word Counts for each document using ggplot2
+p <- lapply(
+   nwords.lim100,
+   function(Num.Words) {
+      df = as.data.frame(Num.Words)
+      ggplot(df, aes(x=Num.Words)) + 
+         geom_histogram(bins = 22, fill = "blue", col="black", alpha = 0.2) +
+         ggtitle(names(Num.Words)) +
+         theme(plot.title = element_text(size = rel(1.8)),
+               axis.text.x = element_text(size = rel(1.5)),
+               axis.text.y = element_text(size = rel(1.5)),
+               axis.title.x = element_text(size = rel(1.5)),
+               axis.title.y = element_text(size = rel(1.5)),
+               )
+   }
+)
+# Add titles to each plot
+for(i in seq(Data.Name)) {
+   p[[i]] <- p[[i]] + ggtitle(Data.Name[i])
+}
+# Print all histograms in grid
+grid.arrange(grobs = p, nrow = 1,
+             top = textGrob("Number of Words per Line", gp=gpar(fontsize=25,font=1)))
+```
+  <center>  **Plot 1.1:** Number of Words per Line.  </center>    
+***  
+- Maximum words per Line for US Blogs is 6630 and for US News is 1792. But their mean and median values are much lower.  
+- Histograms show that most of entries have less than 100 words. This observation may indicate little variability in n-gram constructions. (it's difficult to write complex, diverse sentences in an entry of just 50-100 words).  
+Let's create n-grams and see if our assumptions are true.  
+
+### Sample Data Sets.  
+Observed Data Sets are quite large to process them. Lets take 5% random samples from each file.  
+Seed will be set for reproducibility purposes.  
+  
+```{r, echo=TRUE, cache=TRUE}
+# Set seed of 123
+set.seed(123)
+# Sample Rate variable (set to 5% of whole data set)
+prob = 0.05
+# Data will be sample using rbinom() function. 
+# Random binomial sequence will be created to choose 5% of lines from Data Set 
+dfSampleList <- lapply(df.list, function(corp) {
+      SampInds <- rbinom(corp, 1, prob = prob)
+      dfSimple <- corp[SampInds == 1]
+})
+rm(df.list)
+```
+  
+# 2. PreProcess Data and Create a Corpus.  
+First of all let's create Text Corpus for each data set using 'VCorpus' function from 'tm' library.  
+The following text transformations will be done:  
+- Extra spaces removed,  
+- All letters lower case,  
+- Convert all characters to ASCII encoding,  
+- Punctuation and numbers removed,  
+- Stop words removed (most frequently occured words, like 'a', 'the', etc.). There are some cases in NLP where stop words are needed for good predictions. But in simple 2,3-gram constructions they will not give us much information.  
+
+```{r, echo=TRUE, cache=TRUE}
+## Obtain Corpora
+dfEn <- VCorpus(VectorSource(dfSampleList), readerControl = list(language = "lat"))
+rm(dfSampleList)
+
+## Add names to Corpuses
+Doc.Names <- c("Blogs", "News", "Twitter")
+meta(dfEn, tag="id", type = "local") <- Doc.Names
+
+## Clean Corpora (extra spaces, lower case letters, convert to ascii, no digits, no punctuation)
+dfEn <- tm_map(dfEn, content_transformer(tolower))
+dfEn <- tm_map(dfEn, content_transformer(function(x) iconv(x, "latin1", "ASCII", sub="")))
+dfEn <- tm_map(dfEn, removeWords, stopwords("english"))
+dfEn <- tm_map(dfEn, content_transformer(function(x) gsub('[[:punct:][:digit:]]+', ' ', x)))
+dfEn <- tm_map(dfEn, stripWhitespace)
+```
+  
+  
+# 3. Tokenize Corpus and create N-Grams.  
+## 3.1 Tokenize Corpus.  
+
+- Now lets process Corpus to create n-grams. They are parts of the text containing individual words (1-grams), 2 words (2-grams) etc. In this paper 1,2,3-grams will be constructed.  
+- The purpose of this task is to create Term Document Matrix (matrix of number of occurances of each token in every document).  
+- 'tm' library will be used to create tokenizers (NGramTokenizer function) and create Term Document Matrix (TermDocumentMatrix function).  
+- Tokens occured less than 5 times will be removed from the Matrices to reduce sparsity.
+
+```{r, echo=TRUE, cache=TRUE}
+## Create n-gram tokenizers
+UnigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+
+## Create Term Dictionary Matrices
+uniTDM <- TermDocumentMatrix(dfEn, control = list(tokenize = UnigramTokenizer))
+biTDM <- TermDocumentMatrix(dfEn, control = list(tokenize = BigramTokenizer))
+triTDM <- TermDocumentMatrix(dfEn, control = list(tokenize = TrigramTokenizer))
+```
+
+
+```{r, echo=TRUE, cache=TRUE}
+## Erase low frequency terms
+MinCount = 5
+uniTDM <- uniTDM[findFreqTerms(uniTDM, MinCount),]
+biTDM <- biTDM[findFreqTerms(biTDM, MinCount),]
+triTDM <- triTDM[findFreqTerms(triTDM, MinCount),]
+```
+
+Inspect matrices, frequencies of Terms (Tokens) and sparsity values:  
+```{r, echo=TRUE, cache=TRUE}
+inspect(uniTDM)
+```
+
+```{r, echo=TRUE, cache=TRUE}
+inspect(biTDM)
+```
+
+```{r, echo=TRUE, cache=TRUE}
+inspect(triTDM)
+```
+Sparsity value of the 3-gram Matrix looks quite high (38%). Let's leave it for now and see how model will perform with this value. 
+
+## 3.2 Explore N-Grams in individual documents.  
+  
+Next let's plot frequencies of Terms' occurences for each document separately. Sorting the values to find out most frequent terms in each document. 30 most frequent Terms will be plotted for each document.  
+
+```{r, echo=TRUE, fig.width=14, fig.height=7, cache=TRUE}
+# function plot.token.freqs() creates plot (scatter) of 30 top Terms frequences in individual Document
+plot.token.freqs <- function(df, doc){
+   df <- df[df['Docs'] == doc, ]
+   ggplot(data = df[c(0:30),]) +
+      aes(x = Freq, y = reorder(Terms,Freq, sum)) +
+      geom_point() +
+      labs(title = doc, x = 'Frequency', y = 'Terms') +
+      theme_bw() +
+      theme(plot.title = element_text(size = rel(1.8)),
+            axis.text.x = element_text(size = rel(1.5)),
+            axis.text.y = element_text(size = rel(1.5)),
+            axis.title.x = element_text(size = rel(1.5)),
+            axis.title.y = element_text(size = rel(1.5)),
+            )
+}
+
+# function plot.NGrams plots in grid 30 top Terms' frequencies for all Documents
+plot.NGrams <- function(df, ngram.name, Doc.Names) {
+   for(doc in seq(Doc.Names)) {
+      p[[doc]] <- plot.token.freqs(df, Doc.Names[doc])
+      p[[doc]]
+   }
+   title <- paste(ngram.name, "Tokens Frequencies", sep = " ", collapse = NULL)
+   grid.arrange(grobs = p, nrow = 1,
+                top = textGrob(title, gp=gpar(fontsize=25,font=1)))
+}
+```
+  
+### 3.2.1 UniGrams analysis.  
+- Next let's calculate frequencies of Tokens' occurances for each document separately. Sorting the values to find out most frequent tokens in each document.    
+```{r, echo=TRUE, fig.width=14, fig.height=7, cache=TRUE}
+# convert TDM to data frame and arrange by decreasing frequency
+df.UniGram.Doc <- as.data.frame(as.table(uniTDM))
+df.UniGram.Doc <- df.UniGram.Doc %>% 
+   arrange(desc(Freq)) %>%
+   mutate(Terms = as.character(Terms))
+# call plot.NGrams() function to plot frequencies of UniGrams in each document
+plot.NGrams(df.UniGram.Doc, 'UniGram', Doc.Names)
+```
+  <center>  **Plot 3.1:** Unigram Tokens' Frequencies.  </center>    
+***  
+
+### 3.2.2 BiGrams analysis.  
+
+- 2-grams and 3-grams will be presented as (1-gram - 1-gram) and (2-gram - 1-gram). In general this division look like: 
+<center>$NGram = (N-1)Gram + NewTerm$</center>    
+In this case last terms act as new words (prediction targets).  
+- Probability of these last words given previous (N-1)Grams is calculated by formula:  
+<center>$Probability(NewTerm|(N-1)Gram) = Frequency(NGram) / Frequency((N-1)Gram)$</center>  
+- This probability will be shown in the next tables on 'Rate' column. Freq.Prev column contains frequencies of (N-1)Grams.  
+
+```{r, echo=TRUE, fig.width=14, fig.height=7, cache=TRUE}
+# convert TDM of 2-grams to data frame and do transformations:
+df.BiGram.Doc <- as.data.frame(as.table(biTDM))
+# 1. Arrange data frame by decreasing values of Frequency, 
+# 2. Separate, NGram to (N-1)Gram (PrevGram in the table) and NewTerm
+# 3. Join table with (N-1)Gram frequencies by (N-1)Gram Term names and Document names
+# 4. Calculate Rate as "NGram Frequency / (N-1)Gram Frequency"
+df.BiGram.Doc <- df.BiGram.Doc %>%
+      arrange(desc(Freq)) %>%
+      mutate(PrevGram = sub("^(.*) ([[:alnum:]]+)$", '\\1', Terms)) %>%
+      mutate(NewTerm = sub("^(.*) ([[:alnum:]]+)$", '\\2', Terms)) %>%
+      left_join(y = df.UniGram.Doc[,c("Terms", "Docs", "Freq")], 
+                by = c("PrevGram" = "Terms", "Docs" = "Docs"), 
+                suffix = c("", ".Prev")) %>%
+      mutate(Rate = Freq / Freq.Prev) %>%
+      filter(!is.na(Rate)) %>%
+      mutate(Terms = as.character(Terms))
+
+# call plot.NGrams() function to plot frequencies of 2-Grams in each document
+plot.NGrams(df.BiGram.Doc, 'BiGram', Doc.Names)
+# The same will be done to create 3-Grams.
+```
+  <center>  **Plot 3.2:** Bigram Tokens' Frequencies.  </center>   
+***  
+```{r, echo=TRUE}
+# print tables for each document individually using formattable() function
+formattable(head(df.BiGram.Doc[df.BiGram.Doc['Docs'] == Doc.Names[1], ]))
+```
+  <center>  **Table 3.1:** 2-Gram Frequencies and (1-Gram)-(1-Gram) Probabilities from `r Doc.Names[1]` </center> 
+***    
+```{r, echo=TRUE}
+formattable(head(df.BiGram.Doc[df.BiGram.Doc['Docs'] == Doc.Names[2], ]))
+```
+  <center>  **Table 3.2:** 2-Gram Frequencies and (1-Gram)-(1-Gram) Probabilities from `r Doc.Names[2]` </center> 
+*** 
+```{r, echo=TRUE}
+formattable(head(df.BiGram.Doc[df.BiGram.Doc['Docs'] == Doc.Names[3], ]))
+```
+  <center>  **Table 3.3:** 2-Gram Frequencies and (1-Gram)-(1-Gram) Probabilities from `r Doc.Names[3]` </center> 
+*** 
+
+### 3.2.3 TriGrams analysis.  
+
+```{r, echo=FALSE, fig.width=14, fig.height=7}
+## make data frame from TermDocumentMatrix
+df.TriGram.Doc <- as.data.frame(as.table(triTDM))
+df.TriGram.Doc <- df.TriGram.Doc %>%
+      arrange(desc(Freq)) %>%
+      mutate(PrevGram = sub("^(.*) ([[:alnum:]]+)$", '\\1', Terms)) %>%
+      mutate(NewTerm = sub("^(.*) ([[:alnum:]]+)$", '\\2', Terms)) %>%
+      left_join(y = df.BiGram.Doc[,c("Terms", "Docs", "Freq")], 
+                by = c("PrevGram" = "Terms", "Docs" = "Docs"), 
+                suffix = c("", ".Prev")) %>%
+      mutate(Rate = Freq / Freq.Prev) %>%
+      filter(!is.na(Rate)) %>%
+      mutate(Terms = as.character(Terms))
+
+plot.NGrams(df.TriGram.Doc, 'TriGram', Doc.Names)
+```
+  <center>  **Plot 3.3:** Trigram Tokens' Frequencies.  </center>   
+***    
+```{r, echo=TRUE}
+formattable(head(df.TriGram.Doc[df.TriGram.Doc['Docs'] == Doc.Names[1], ]))
+```
+  <center>  **Table 3.4:** 3-Gram Frequencies and (2-Gram)-(1-Gram) Probabilities from `r Doc.Names[1]` </center> 
+*** 
+```{r, echo=TRUE}
+formattable(head(df.TriGram.Doc[df.TriGram.Doc['Docs'] == Doc.Names[2], ]))
+```
+  <center>  **Table 3.5:** 3-Gram Frequencies and (2-Gram)-(1-Gram) Probabilities from `r Doc.Names[2]` </center> 
+*** 
+```{r, echo=TRUE}
+formattable(head(df.TriGram.Doc[df.TriGram.Doc['Docs'] == Doc.Names[3], ]))
+```
+  <center>  **Table 3.6:** 3-Gram Frequencies and (2-Gram)-(1-Gram) Probabilities from `r Doc.Names[3]` </center> 
+*** 
+  
+## 3.3 Explore N-Grams in whole Corpus.  
+
+Let's sum Term Counts of individual documents for each Text Document Matrix and sort values to find most frequent Tokens of the whole Text Corpus.  
+```{r, echo=TRUE}
+# Sum Frequency values of the documents; arrange TDM's by decreasing Frequency and create data frames
+vec.UniGram.Corp <- sort(rowSums(as.matrix(uniTDM)), decreasing = TRUE)
+df.UniGram.Corp <- data.frame(Terms = names(vec.UniGram.Corp), Freq = vec.UniGram.Corp)
+
+vec.BiGram.Corp <- sort(rowSums(as.matrix(biTDM)), decreasing = TRUE)
+df.BiGram.Corp <- data.frame(Terms = names(vec.BiGram.Corp), Freq = vec.BiGram.Corp)
+
+vec.TriGram.Corp <- sort(rowSums(as.matrix(triTDM)), decreasing = TRUE)
+df.TriGram.Corp <- data.frame(Terms = names(vec.TriGram.Corp), Freq = vec.TriGram.Corp)
+```
+
+Next plot NGram's Tokens' frequencies for Whole Corpus:  
+```{r, echo=FALSE, fig.width=14, fig.height=7}
+# function plot.token.freqs() plots terms frequencies of individual NGram
+plot.token.freqs <- function(df, ngram){
+   ggplot(data = df[c(0:30),]) +
+      aes(x = Freq, y = reorder(Terms,Freq, sum)) +
+      geom_point() +
+      labs(title = ngram, x = 'Frequency', y = 'Terms') +
+      theme_bw() +
+      theme(plot.title = element_text(size = rel(1.8)),
+            axis.text.x = element_text(size = rel(1.5)),
+            axis.text.y = element_text(size = rel(1.5)),
+            axis.title.x = element_text(size = rel(1.5)),
+            axis.title.y = element_text(size = rel(1.5)),
+            )
+}
+
+# Print plots of individual data frames in grid
+df.NGram.List <- list(df.UniGram.Corp, df.BiGram.Corp, df.TriGram.Corp)
+NGram.Names <- c('UniGram', 'BiGram', 'TriGram')
+for(ngram in seq(df.NGram.List)) {
+   p[[ngram]] <- plot.token.freqs(df.NGram.List[[ngram]], NGram.Names[ngram])
+   p[[ngram]]
+}
+grid.arrange(grobs = p, nrow = 1,
+             top = textGrob("NGram Tokens Frequencies", gp=gpar(fontsize=25,font=1)))
+```
+  <center>  **Plot 3.4:** NGram Tokens' Frequencies.  </center>   
+***    
+
+Next create and analyse tables with (N-1)Gram + NewTerm and Probabilities of New Term given (N-1)Gram frequencies (as done before for individual documents).  
+
+```{r, echo=FALSE, fig.width=14, fig.height=7, cache=TRUE}
+# Transformations similar to what have done for individual documents above
+df.UniGram.Corp <- df.UniGram.Corp %>% 
+   arrange(desc(Freq)) %>%
+   mutate(Terms = as.character(Terms))
+
+df.BiGram.Corp <- df.BiGram.Corp %>%
+      arrange(desc(Freq)) %>%
+      mutate(PrevGram = sub("^(.*) ([[:alnum:]]+)$", '\\1', Terms)) %>%
+      mutate(NewTerm = sub("^(.*) ([[:alnum:]]+)$", '\\2', Terms)) %>%
+      left_join(y = df.UniGram.Corp[,c("Terms", "Freq")], 
+                by = c("PrevGram" = "Terms"), 
+                suffix = c("", ".Prev")) %>%
+      mutate(Rate = Freq / Freq.Prev) %>%
+      filter(!is.na(Rate)) %>%
+      mutate(Terms = as.character(Terms))
+
+df.TriGram.Corp <- df.TriGram.Corp %>%
+      arrange(desc(Freq)) %>%
+      mutate(PrevGram = sub("^(.*) ([[:alnum:]]+)$", '\\1', Terms)) %>%
+      mutate(NewTerm = sub("^(.*) ([[:alnum:]]+)$", '\\2', Terms)) %>%
+      left_join(y = df.BiGram.Corp[,c("Terms", "Freq")], 
+                by = c("PrevGram" = "Terms"), 
+                suffix = c("", ".Prev")) %>%
+      mutate(Rate = Freq / Freq.Prev) %>%
+      filter(!is.na(Rate)) %>%
+      mutate(Terms = as.character(Terms))
+```
+
+```{r, echo=TRUE}
+formattable(head(df.BiGram.Corp))
+```
+  <center>  **Table 3.7:** 2-Gram Frequencies and (1-Gram)-(1-Gram) Probabilities of whole Corpus </center> 
+***  
+  
+```{r, echo=TRUE}
+formattable(head(df.TriGram.Corp))
+```
+  <center>  **Table 3.8:** 3-Gram Frequencies and (2-Gram)-(1-Gram) Probabilities of whole Corpus </center> 
+***  
+- There are some common top NGrams in different documents, but a lot of them are unique for each document. It is clearly valuable to take into account the context of NGrams (type of texts: twits, messages, news, classic literature) for prediction purposes.  
+- Some abbreviations ('a m', 'p m', 'u s') are very common. It's not so clear if they shoud be removed from the Corpus or not. It may depend on modelling purposes (predict next word/letter, predict the mood of author etc.).  
+- Assumption about little NGrams variability was partially confirmed. There is a small amount of NGrams with relatively high frequencies. But data set is too small to make conclusive decision.
+
+# 4. Visualization of NGrams Frequencies.  
+Let's draw a WordCloud to visualize NGrams for whole Corpus. Size of Terms represent their frequency of occurances in the Corpus. 30 top Terms will be drawn. It will help better understand NGrams frequencies' distributions.
+
+```{r, echo=TRUE, fig.width=14, fig.height=7}
+# create WordClouds for individual NGram using ggplot2.
+p <- lapply(df.NGram.List, function(df){
+   n = 30
+   ggplot(df[c(0:n),]) + 
+      aes(label = Terms, 
+          size = Freq,
+          color = Freq) +
+      geom_text_wordcloud_area() +
+      scale_size_area(max_size = 20) +
+      theme_minimal()
+})   
+
+# print in grid WordClouds for each NGram
+grid.arrange(grobs = p, nrow = 1,
+             top = textGrob("WordClouds for NGrams of whole Corpus", gp=gpar(fontsize=25,font=1)))
+```
+  <center>  **Plot 4.1:** WordClouds for NGrams of whole Corpus.  </center>   
+***  
+
+# 5. Summary and Plan for future model building.  
+### 5.1 Future Plan for the Project.  
+1. Build, fit, evaluate prediction models to test constructed NGrams
+2. Check if higher level of NGrams needed (4,5-grams) for better predictions
+3. Try different way of Corpus transformations (include stopwords, remove abbreviations etc.)
+4. Try to decrease Sparsity of Term Document Matrix and see if it improves models.  
+5. Decide necessity of increasing data samples
+6. Develop basic application based on created models. (user type some words and app suggests next one)
+
+### 5.2 Summary and Conclusion.
+- Data sets were successfully collected and processed. 
+- Summary statistics for each text document was created and analized. There was an assumption that NGram constructions will have little variability (there will be a little number of top NGrams with significantly higher frequencies according to mean frequencies)  
+- Data sets were tokenized creating 1-gram, 2-gram and 3-gram constructions. Term Document Matrices were created and NGrams frequencies visualized for each individual document as well as for whole Corpus.  
+Assumption about low NGrams variability was partially confirmed.  
+Another observation was done about necessity of taking into account the context of the word being predicted. For different documents there were observed significantly different frequencies of many NGrams.  
+- A plan for creating and implementing future prediction algorithms has been drawn up.
+- Whole Project available by the link: https://github.com/Norbik91/NLP_Project_JohnsHopkins
+
+
